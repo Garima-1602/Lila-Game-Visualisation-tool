@@ -1,85 +1,216 @@
-# Architecture (one page)
 
-## What we built and why
+## Architecture Overview
 
-**LILA BLACK — designer map explorer** is a single-page **Vite + React + TypeScript** app that runs entirely in the browser: pick Parquet telemetry, see **paths, combat/loot markers, heatmaps, and timeline playback** on the official **1024²** minimaps, plus a **readouts rail** (stats, overlays, quick reads).
+This project is a frontend-only gameplay analytics tool designed for Level Designers to visually understand player behavior across LILA BLACK maps.
 
-| Piece | Why it was chosen |
-|--------|-------------------|
-| **Vite** | Fast dev/build, simple static `dist/` for hosting (Netlify/Vercel/Pages). |
-| **React + TS** | UI state (filters, scrubber, layers) maps cleanly to components; types align with the Parquet schema. |
-| **hyparquet + hyparquet-compressors** | Read `.nakama-0` Parquet in-browser without a backend or Python runtime. |
-| **Canvas** for the map | Thousands of points per match; 2D draw is predictable vs DOM/SVG at this density. |
-| **React Flow + elkjs** (lazy tab) | Optional **roster** graph: match → players as a readable layout without custom graph math in the hot path. |
+The application processes gameplay telemetry data stored in parquet files and converts it into:
+- player movement paths
+- combat markers
+- loot events
+- storm deaths
+- heatmaps
+- timeline playback visualizations
 
-Demo Parquet is **not** bundled: `generateDemoEvents()` seeds a tiny match so the UI works before files load.
-
----
-
-## Data flow: files → screen
-
-1. **Input** — User selects a folder (webkit path → `February_*` day tag) or multiple files. Only `*.nakama-0` / `*.parquet` are read.
-2. **Parse** — Each file buffer goes through `parquetReadObjects` → rows as plain objects. `rawRowsToGameEvents` keeps known `event` kinds, coerces `x,y,z`, decodes `event` (string or bytes → UTF-8), and drops bad rows.
-3. **Normalize time** — `ts` is absolute-ish per file; we subtract **per-`match_id` minimum** so `tMs` is **0-based within the match** and comparable across all journey files for that match (`normalizeMatchTimes`).
-4. **Annotate** — `isBot` from `user_id` (UUID vs numeric, with a small fallback heuristic).
-5. **Filter (React state)** — `map_id`, optional days, optional single `match_id`, phase slice, scrubber `playbackT` → one list `mapEvents` (events with `tMs ≤ playbackT` in the chosen window).
-6. **Render** — Same list feeds **canvas** (`drawMinimapOverlay`: paths, markers, heatmap grid, optional dead/choke masks) and the **readouts rail** (counts, zones, insight cards).
-
-**One line:** Parquet rows → typed `GameEvent[]` → filtered by map/match/time → canvas + panel from the **same** event slice.
+The entire application runs directly in the browser without requiring a backend server or database.
 
 ---
 
-## World (x, z) → minimap pixels (the tricky part)
+# System Flow
 
-The dataset README defines the contract: **minimap art is 1024×1024**; world is **horizontal x and z**; **y is elevation**, not used for 2D placement.
-
-1. Per map, constants **`originX`, `originZ`, `scale`** map the playable world into normalized **u, v ∈ [0,1]** (roughly “where on the art this world point sits”):
-
-   `u = (x - originX) / scale`, `v = (z - originZ) / scale`
-
-2. Convert to **image pixels** (origin top-left, Y down):
-
-   `pixel_x = u * 1024`, `pixel_y = (1 - v) * 1024`
-
-   The **`(1 - v)`** flip is the usual game-vs-image Y convention mismatch.
-
-3. **Clipping** — Points outside `[0, 1024]²` are skipped for heatmap accumulation and similar logic so bad rows or future map drift do not paint garbage.
-
-4. **Config source** — `mapConfig.ts` duplicates the README table (AmbroseValley, GrandRift, Lockdown) and exposes `worldToMinimap1024()` so **draw code and analytics grids share one transform**.
-
-If the art or world bounds drift from README numbers, trails will **slide or shear** relative to terrain—that is the main correctness risk, not the math itself.
+```text
+                ┌─────────────────────┐
+                │  Parquet Files      │
+                │ (.nakama-0 files)   │
+                └──────────┬──────────┘
+                           │
+                           ▼
+                ┌─────────────────────┐
+                │  hyparquet Parser   │
+                │  (Browser Parsing)  │
+                └──────────┬──────────┘
+                           │
+                           ▼
+                ┌─────────────────────┐
+                │ Event Normalization │
+                │ Decode Events       │
+                │ Detect Bots/Humans  │
+                │ Match Reconstruction│
+                └──────────┬──────────┘
+                           │
+                           ▼
+                ┌─────────────────────┐
+                │ Coordinate Mapping  │
+                │ World → Minimap     │
+                └──────────┬──────────┘
+                           │
+                           ▼
+                ┌─────────────────────┐
+                │ React State Layer   │
+                │ Filters & Timeline  │
+                └──────────┬──────────┘
+                           │
+                           ▼
+                ┌─────────────────────┐
+                │ Visualization Layer │
+                │ Paths • Heatmaps    │
+                │ Combat • Loot       │
+                │ Playback Timeline   │
+                └─────────────────────┘
+```
 
 ---
 
-## Assumptions where data was ambiguous
+# What We Built
+
+The tool allows Level Designers to:
+- replay player journeys on real minimaps
+- identify high combat areas
+- analyze movement flow
+- compare human vs bot behavior
+- detect dead zones and choke points
+- study storm pressure areas
+
+The focus was to make gameplay telemetry visually understandable without requiring technical analysis of raw parquet files.
+
+---
+
+# Tech Stack
+
+| Technology | Purpose |
+|---|---|
+| React + TypeScript | Frontend application |
+| Vite | Development and build tooling |
+| hyparquet | Browser-based parquet parsing |
+| Canvas API | High-performance rendering |
+| Netlify / Vercel | Deployment |
+
+---
+
+# Why Frontend-Only Architecture?
+
+The dataset size (~89k rows) is small enough to process directly in the browser.
+
+Benefits:
+- simpler deployment
+- no backend infrastructure
+- no database setup
+- lower hosting complexity
+- easy sharing using a single URL
+
+Tradeoff:
+- very large datasets may increase browser memory usage
+
+---
+
+# Data Flow
+
+## Step 1 — Load Data
+The browser loads parquet files from:
+- uploaded folders/files
+or
+- bundled `public/data` directory
+
+---
+
+## Step 2 — Parse Data
+`hyparquet` reads parquet data directly in the browser.
+
+Each row contains:
+- player ID
+- match ID
+- coordinates
+- timestamp
+- gameplay event
+
+---
+
+## Step 3 — Normalize Events
+The system:
+- decodes event bytes into readable strings
+- filters valid event types
+- reconstructs matches using `match_id`
+- sorts events using timestamps
+
+---
+
+## Step 4 — Detect Humans vs Bots
+
+Detection logic:
+- UUID-style IDs → Human players
+- Numeric IDs → Bots
+
+Different visual styles are used for each.
+
+---
+
+# Coordinate Mapping
+
+The game world uses 3D world coordinates, while minimaps use 2D image coordinates.
+
+Only:
+- `x`
+- `z`
+
+are used for minimap plotting.
+
+`y` represents elevation and is ignored for 2D visualization.
+
+---
+
+## Coordinate Conversion Logic
+
+Step 1:
+
+u = (x - origin_x) / scale
+
+v = (z - origin_z) / scale
+
+Step 2:
+
+pixel_x = u × 1024
+
+pixel_y = (1 - v) × 1024
+
+The Y-axis is flipped because minimap images use top-left origin coordinates.
+
+---
+
+# Assumptions Made
 
 | Situation | Handling |
-|-----------|----------|
-| **`event` as bytes** in Parquet | Decode with UTF-8; unknown event strings are **dropped** (only the 8 README kinds are kept). |
-| **`ts` type varies** (Date vs number vs bigint) | `rowTimestampMs()` normalizes to **ms number** before per-match offset. |
-| **Human vs bot** | Primary rule: **numeric `user_id` → bot**, **UUID → human**; if neither, **non-UUID → treated as bot-ish** so odd IDs still render rather than breaking. |
-| **Match time zero** | `tMs = ts - min(ts)` **per match_id** across all loaded rows for that match so timelines align when merging many journey files. |
-| **“All matches” on one map** | Overlay mode: multiple `match_id`s draw together; scrubber range spans **union** of visible matches—good for density, noisy for narrative. |
-| **Heatmap / overlays** | Coarse grid + blur + decimated paths for performance; heuristics for “dead” and “choke” sectors are **relative to the current slice**, not ground-truth design labels. |
+|---|---|
+| Event stored as bytes | Decoded using UTF-8 |
+| Unknown event types | Ignored |
+| Human vs Bot detection | UUID = Human, Numeric ID = Bot |
+| Timestamp variations | Converted into normalized milliseconds |
+| Match reconstruction | Grouped using `match_id` |
 
 ---
 
-## Tradeoffs (what we considered → what we did)
+# Tradeoffs
 
-| Topic | Considered | Decided |
-|--------|------------|---------|
-| **Backend vs client-only** | Pre-aggregate in DuckDB/Spark; small API | **All client** — zero ops, privacy-friendly file pick, limited by RAM/CPU on huge folders. |
-| **Rendering** | Mapbox/WebGL | **2D canvas** on static minimap — matches assignment “on official minimap art,” simpler coordinate story. |
-| **Time model** | Wall-clock vs phase-of-match | **Per-match `tMs`** from data `ts`; phase chips are **thirds of the scrub window** (design pacing aid, not ring phase API). |
-| **Roster graph** | Skip vs ELK | **Lazy-loaded** graph so the default map tab stays light. |
-| **Insights** | ML clustering | **Rule-based** cards from snapshot + spatial grid — explainable, works on thin data, wrong less cryptically than a black box. |
+| Considered | Decision |
+|---|---|
+| Backend API vs frontend-only | Chose frontend-only for simplicity |
+| SVG vs Canvas rendering | Used Canvas for better performance |
+| ML-based insights vs rule-based insights | Used rule-based insights for explainability |
+| Real-time pipeline vs static dataset | Focused on static visualization for assignment scope |
 
 ---
 
-## Three things we learned about the game *through building/using the tool*
+# Key Learnings
 
-1. **The story is mostly movement** — README notes **~85%+** rows are `Position` / `BotPosition`; the map is path-heavy. The tool had to **decimate** paths and use a **coarse heatmap** so real folders stay interactive.
+## 1. Player movement dominates gameplay
+Most telemetry rows are movement events, making path visualization and heatmaps critical for analysis.
 
-2. **Humans and bots are first-class different channels** — Separate event types (`Position` vs `BotPosition`, `Kill` vs `BotKill`, …) and IDs force **two visual languages** (cyan vs slate, distinct markers). Any “one mixed heatmap” view hides whether pressure is PvP or PvE unless you split layers.
+---
 
-3. **Match reconstruction is a join problem** — One match = **many files** (one per actor). Sorting and normalizing by **`match_id` + `tMs`** is non-negotiable for a coherent scrubber; a single file in isolation is only one actor’s slice of the truth.
+## 2. Bots and humans behave differently
+Separating bot and human visualizations provides clearer understanding of PvE vs PvP engagement areas.
+
+---
+
+## 3. Match reconstruction is essential
+A single match contains multiple player files. Reconstructing matches using `match_id` is necessary for accurate timeline playback and gameplay analysis.
+
+---
