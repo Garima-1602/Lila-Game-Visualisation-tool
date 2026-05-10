@@ -12,10 +12,8 @@ The application is fully browser-based and does not require any backend server.
 
 # Live Demo
 
-Add deployed URL here after deployment.
-
-Example:
-https://your-app.netlify.app
+Deployment URL:
+(https://lila-game-visualisation-tool-winr.vercel.app)
 
 ---
 
