@@ -8,6 +8,7 @@
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview",
+    "sync-player-data": "node ./scripts/sync-player-data.js",
     "deploy:netlify": "npm run build && npx --yes netlify deploy --prod --dir=dist"
   },
   "dependencies": {
